@@ -211,7 +211,7 @@ def handle_turnstile(sb) -> bool:
             return True
         try: sb.execute_script(_EXPAND_JS)
         except Exception: pass
-        time.sleep(5)
+        time.sleep(0.3)
         
         _click_turnstile(sb)
         
@@ -228,7 +228,7 @@ def handle_turnstile(sb) -> bool:
 def login(sb) -> bool:
     print(f"🌐 打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
-    time.sleep(10)
+    time.sleep(6)
 
     print("⏳ 等待 Cloudflare 验证通过...")
     cf_passed = False
@@ -268,11 +268,11 @@ def login(sb) -> bool:
 
     print(f"📧 填写邮箱...")
     js_fill_input(sb, 'input[name="email"]', EMAIL)
-    time.sleep(2)
+    time.sleep(0.3)
     
     print("🔑 填写密码...")
     js_fill_input(sb, 'input[name="password"]', PASSWORD)
-    time.sleep(2)
+    time.sleep(1)
 
     if sb.execute_script(_EXISTS_JS):
         if not handle_turnstile(sb):
