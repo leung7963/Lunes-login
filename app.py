@@ -211,7 +211,7 @@ def handle_turnstile(sb) -> bool:
             return True
         try: sb.execute_script(_EXPAND_JS)
         except Exception: pass
-        time.sleep(0.3)
+        time.sleep(5)
         
         _click_turnstile(sb)
         
