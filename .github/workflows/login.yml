@@ -2,7 +2,7 @@ name: Auto-login-Lunes
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 */14 * *' # 每隔14天 12点(UTC 1点) 北京时间9点 运行
+    - cron: '0 1 */7 * *' # 每隔14天 12点(UTC 1点) 北京时间9点 运行
 
 jobs:
   Renew-lunes:
@@ -57,3 +57,11 @@ jobs:
               gh run delete $run_id || true
             fi
           done 
+
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: leung7963/gh-workflow-keepalive@main
