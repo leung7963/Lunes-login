@@ -32,7 +32,7 @@ jobs:
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }} # 在secret里设置 NODE_LINK 代理启用代理 
         run: |
-          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+          bash <(wget -qO- https://raw.githubusercontent.com/leung7963/other/main/proxy.sh)
  
       - name: 🚀 运行续期脚本
         env:
