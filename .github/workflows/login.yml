@@ -58,9 +58,5 @@ jobs:
             fi
           done 
 
-  workflow-keepalive:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
       - uses: leung7963/gh-workflow-keepalive@main
+
