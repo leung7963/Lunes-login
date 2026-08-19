@@ -226,8 +226,8 @@ def handle_turnstile(sb) -> bool:
     return False
 
 def login(sb) -> bool:
-    print(f"🌐 打开登录页面: {LOGIN_URL}")
-    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
+    print(f"🌐 打开登录页面(UC+CDP): {LOGIN_URL}")
+    sb.activate_cdp_mode(LOGIN_URL)
     time.sleep(6)
 
     print("⏳ 等待 Cloudflare 验证通过...")
