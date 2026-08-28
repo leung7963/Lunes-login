@@ -34,23 +34,27 @@ jobs:
         #run: |
           #bash <(wget -qO- https://raw.githubusercontent.com/leung7963/other/main/proxy.sh)
 
-      - name: Install and configure Cloudflare WARP (IPv4 only)
+      - name: Configure WARP as proxy (SOCKS5 on 127.0.0.1:1081)
         run: |
-          # 禁用IPv6
-          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
-          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
-          sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
-          echo "net.ipv6.conf.all.disable_ipv6=1" | sudo tee -a /etc/sysctl.conf
-          echo "net.ipv6.conf.default.disable_ipv6=1" | sudo tee -a /etc/sysctl.conf
-          
-          # 安装WARP
+          # 安装 WARP（如果尚未安装）
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt-get update && sudo apt-get install -y cloudflare-warp
           
-          # 注册并连接
+          # 注册 WARP
           sudo warp-cli --accept-tos registration new
+          
+          # 设置为代理模式
+          sudo warp-cli --accept-tos mode proxy
+          
+          # 设置代理端口为 1081
+          sudo warp-cli --accept-tos proxy port 1081
+          
+          # 连接 WARP
           sudo warp-cli --accept-tos connect
+          
+          # 验证状态
+          sudo warp-cli --accept-tos status
  
       - name: 🚀 运行续期脚本
         env:
