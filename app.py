@@ -620,6 +620,29 @@ def click_open_panel_and_restart(sb, server_id):
     # ctrl 控制面板可能要求单独登录
     login_ctrl(sb)
 
+    # 登录成功后，重新确认导航到目标 URL ctrl.lunes.host/server/{uuid}
+    if uuid:
+        target_url = f"https://ctrl.lunes.host/server/{uuid}"
+        confirmed = False
+        print(f"🧭 登录后确认导航到: {target_url}")
+        for _ in range(10):
+            time.sleep(1)
+            try:
+                cur = sb.get_current_url().split('?')[0].rstrip('/')
+                if cur == target_url or cur.endswith(f"/server/{uuid}"):
+                    print(f"✅ 已确认在目标页面: {cur}")
+                    confirmed = True
+                    break
+            except Exception:
+                pass
+        if not confirmed:
+            print(f"🔄 未在目标页面，重新导航: {target_url}")
+            try:
+                sb.open(target_url)
+                time.sleep(3)
+            except Exception as e:
+                print(f"  ⚠️ 重新导航异常: {e}")
+
     # 等待 SPA 渲染按钮
     for _ in range(30):
         time.sleep(1)
