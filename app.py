@@ -416,13 +416,34 @@ def restart_server_via_ctrl(sb, server_id):
     """
     url = f"{CTRL_URL}/server/{server_id}"
     print(f"🔧 打开控制面板: {url}")
-    clicked_button = None
+
     try:
         sb.open(url)
-        time.sleep(5)
 
-        # 查找并点击 start / restart 按钮
+        # 等待 SPA 渲染，轮询最长 30 秒
+        print("⏳ 等待控制面板页面渲染...")
+        buttons_found = []
+        for _ in range(30):
+            time.sleep(1)
+            try:
+                buttons_found = sb.find_elements("button")
+            except Exception:
+                buttons_found = []
+            if buttons_found:
+                break
+        time.sleep(2)  # extra buffer for JS
+
+        # 打印调试信息
+        try:
+            page_title = sb.get_title() or ""
+            print(f"📰 页面标题: {page_title}")
+        except Exception:
+            pass
+
+        clicked_button = None
         clicked = False
+
+        # === 优先策略 1: 匹配按钮文字 ===
         for btn_text in ["restart", "Restart", "RESTART", "start", "Start", "START"]:
             try:
                 buttons = sb.find_elements("button")
@@ -440,16 +461,18 @@ def restart_server_via_ctrl(sb, server_id):
             except Exception as e:
                 print(f"  ⚠️ 查找 {btn_text} 按钮异常: {e}")
 
+        # === 策略 2: 用 JS 查找按钮 (textContent / innerText) ===
         if not clicked:
-            # 尝试用 JS 查找
             try:
                 result = sb.execute_script("""
                     (function() {
-                        var btns = document.querySelectorAll('button');
-                        for (var i = 0; i < btns.length; i++) {
-                            var t = (btns[i].innerText || '').trim().toLowerCase();
-                            if (t.includes('restart') || t.includes('start')) {
-                                btns[i].click();
+                        // 查找所有按钮、a 标签、i 标签
+                        var elems = document.querySelectorAll('button, a, [role="button"], i, svg');
+                        for (var i = 0; i < elems.length; i++) {
+                            var t = (elems[i].innerText || elems[i].textContent || elems[i].getAttribute('title') || '').trim().toLowerCase();
+                            if (t.includes('restart') || t.includes('start') || t.includes('power')) {
+                                elems[i].scrollIntoView({block: 'center'});
+                                elems[i].click();
                                 return t;
                             }
                         }
@@ -464,8 +487,37 @@ def restart_server_via_ctrl(sb, server_id):
             except Exception as e:
                 print(f"  ⚠️ JS 查找按钮异常: {e}")
 
+        # === 策略 3: 点击任何 class/id 含 'restart'/'start' 的元素 ===
         if not clicked:
-            print("  ⚠️ 未找到 start/restart 按钮，页面可能已加载完成或按钮已隐藏")
+            try:
+                result = sb.execute_script("""
+                    (function() {
+                        var elems = document.querySelectorAll('[class*="restart"], [class*="start"], [class*="Start"], [id*="restart"], [id*="start"]');
+                        elems.forEach(function(el) { el.scrollIntoView({block: 'center'}); });
+                        if (elems.length > 0) {
+                            elems[0].click();
+                            return elems[0].tagName + '.' + elems[0].className;
+                        }
+                        return null;
+                    })()
+                """)
+                if result:
+                    print(f"🖱️ JS 点击 class/id 匹配元素: {result}")
+                    clicked = True
+                    clicked_button = result
+                    time.sleep(3)
+            except Exception as e:
+                print(f"  ⚠️ JS class/id 查找异常: {e}")
+
+        if not clicked:
+            # 输出调试信息
+            print("  ⚠️ 未找到 start/restart 按钮")
+            print("  --- 调试：页面来源 (前500字) ---")
+            src = sb.get_page_source() or ""
+            print(src[:500])
+            print("  --- 调试：所有按钮 ---")
+            for btn in sb.find_elements("button"):
+                print(f"    button: text={btn.text[:50]!r} class={btn.get_attribute('class')[:80]!r}")
             return False
 
         print(f"✅ 已点击 {clicked_button} 按钮")
@@ -474,6 +526,10 @@ def restart_server_via_ctrl(sb, server_id):
 
     except Exception as e:
         print(f"  ❌ 控制面板操作异常: {e}")
+        try:
+            sb.save_screenshot("ctrl_panel_fail.png")
+        except Exception:
+            pass
         return False
 
 def main():
