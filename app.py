@@ -413,18 +413,21 @@ def check_tunnel_status():
 def click_open_panel_and_restart(sb, server_id):
     """
     在服务器详情页 (betadash.lunes.host/servers/{id}) 点击 "Open Panel" 按钮
-    (当前页跳转到 ctrl.lunes.host 控制面板)，然后点击 start 或 restart 按钮。
+    (当前页跳转到 ctrl.lunes.host/server/{uuid} 控制面板)，然后点击 start 或 restart 按钮。
+    流程: 提取 uuid -> 点击 Open Panel -> 确认到达 ctrl.lunes.host -> 点击 start/restart
     """
     print("🔧 查找 Open Panel 按钮...")
     panel_clicked = False
+    open_panel_href = None
 
-    # 策略1: 按钮文字匹配
+    # 策略1: 按钮文字匹配 (同时提取 href 中的 uuid)
     for label in ["Open Panel", "open panel", "Open panel"]:
         try:
             buttons = sb.find_elements("button")
             for btn in buttons:
                 btn_txt = (btn.text or "").strip()
                 if btn_txt == label or label.lower() in btn_txt.lower():
+                    open_panel_href = btn.get_attribute('href')
                     print(f"🖱️ 点击 Open Panel 按钮: {btn_txt}")
                     btn.click()
                     panel_clicked = True
@@ -464,19 +467,47 @@ def click_open_panel_and_restart(sb, server_id):
         return False
 
     # 等待跳转到 ctrl 控制面板
+    cur_url = ""
     print("⏳ 等待跳转到控制面板...")
+    arrived = False
     for _ in range(15):
         time.sleep(1)
-        cur_url = ""
         try:
             cur_url = sb.get_current_url().lower()
             if "ctrl.lunes.host" in cur_url:
                 print(f"📍 已跳转控制面板: {cur_url}")
+                arrived = True
                 break
         except Exception:
             pass
-    else:
-        print(f"  ⚠️ 未跳转到 ctrl 面板，当前 URL: {cur_url if cur_url else '未知'}")
+
+    # 若 Open Panel 点击后未跳转，但已提取到含 uuid 的 href，则直接导航
+    if not arrived:
+        if open_panel_href and "ctrl.lunes.host/server/" in open_panel_href.lower():
+            print(f"🧭 点击未跳转，改用 href 直接打开: {open_panel_href}")
+            try:
+                sb.open(open_panel_href)
+                cur_url = open_panel_href.lower()
+                arrived = True
+            except Exception as e:
+                print(f"  ⚠️ 直接打开 href 异常: {e}")
+        else:
+            print(f"  ⚠️ 未跳转到 ctrl 面板，当前 URL: {cur_url if cur_url else '未知'}")
+
+    # 从 ctrl URL 提取 uuid
+    uuid = None
+    if "ctrl.lunes.host/server/" in cur_url:
+        m = re.search(r'/server/([0-9a-fA-F-]+)', cur_url)
+        if m:
+            uuid = m.group(1)
+            print(f"🔑 控制面板 uuid: {uuid}")
+        else:
+            print(f"  ⚠️ 无法从URL解析uuid: {cur_url}")
+    elif open_panel_href:
+        m = re.search(r'/server/([0-9a-fA-F-]+)', open_panel_href)
+        if m:
+            uuid = m.group(1)
+            print(f"🔑 从href提取 uuid: {uuid}")
 
     # 等待 SPA 渲染按钮
     for _ in range(30):
