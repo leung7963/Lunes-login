@@ -13,8 +13,10 @@ EMAIL        = os.environ.get("LUNES_EMAIL") or ""     # 登录邮箱
 PASSWORD     = os.environ.get("LUNES_PASSWORD") or ""  # 登录密码
 TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""      # chat id,可选
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""    # bot token,可选
+TUNNEL_DOMAIN = os.environ.get("TUNNEL_DOMAIN") or ""  # 隧道域名,逗号分隔,可选
 
 LOGIN_URL = "https://betadash.lunes.host/login?next=/"
+CTRL_URL  = "https://ctrl.lunes.host"                 # 控制面板基础地址
 PROXY_URL = "socks5://127.0.0.1:1081"  # SOCKS5 代理地址
 
 #  Telegram 推送
@@ -350,13 +352,130 @@ def visit_server(sb) -> (bool, dict):
     print(f"✅ 成功访问服务器: {server_name} (ID: {server_id})")
     return True, {"server_id": server_id, "server_name": server_name}
 
+# 监控隧道域名状态码
+def check_tunnel_status():
+    """
+    监控隧道域名状态码。
+    返回: (异常域名列表, 正常域名列表)
+    - 状态码 != 404 视为异常（隧道挂了/重定向/其他错误）
+    - 状态码 == 404 视为正常（隧道正常，Cloudflare 404）
+    """
+    if not TUNNEL_DOMAIN:
+        print("ℹ️ 未配置 TUNNEL_DOMAIN，跳过隧道监控。")
+        return [], []
+
+    domains = [d.strip() for d in TUNNEL_DOMAIN.split(',') if d.strip()]
+    if not domains:
+        print("ℹ️ TUNNEL_DOMAIN 为空，跳过隧道监控。")
+        return [], []
+
+    abnormal = []
+    normal = []
+    print(f"🔍 开始监控 {len(domains)} 个隧道域名...")
+
+    for domain in domains:
+        # 确保有协议前缀
+        url = domain if domain.startswith(('http://', 'https://')) else f"https://{domain}"
+        try:
+            # 禁用代理，直连检查（隧道域名通常需要直连）
+            r = requests.get(url, timeout=10, proxies={"http": None, "https": None}, allow_redirects=True, verify=False)
+            status = r.status_code
+            print(f"  📡 {domain} -> HTTP {status}")
+            if status == 404:
+                normal.append(domain)
+                print(f"    ✅ 状态码 404，隧道正常，跳过")
+            else:
+                abnormal.append(domain)
+                print(f"    ⚠️ 状态码 {status}，隧道异常，需要重启")
+        except requests.exceptions.SSLError:
+            # SSL 错误也视为异常（可能证书过期或隧道问题）
+            abnormal.append(domain)
+            print(f"  📡 {domain} -> SSL 错误，隧道异常，需要重启")
+        except Exception as e:
+            abnormal.append(domain)
+            print(f"  📡 {domain} -> 请求异常: {e}，隧道异常，需要重启")
+
+    return abnormal, normal
+
+
+# 在控制面板重启服务器
+def restart_server_via_ctrl(sb, server_id):
+    """
+    进入 ctrl.lunes.host/server/{server_id}，点击 start 或 restart 按钮。
+    """
+    url = f"{CTRL_URL}/server/{server_id}"
+    print(f"🔧 打开控制面板: {url}")
+    clicked_button = None
+    try:
+        sb.open(url)
+        time.sleep(5)
+
+        # 查找并点击 start / restart 按钮
+        clicked = False
+        for btn_text in ["restart", "Restart", "RESTART", "start", "Start", "START"]:
+            try:
+                buttons = sb.find_elements("button")
+                for btn in buttons:
+                    btn_txt = (btn.text or "").strip()
+                    if btn_txt.lower() == btn_text.lower() or btn_text.lower() in btn_txt.lower():
+                        print(f"🖱️ 点击按钮: {btn_txt}")
+                        btn.click()
+                        clicked = True
+                        clicked_button = btn_txt
+                        time.sleep(3)
+                        break
+                if clicked:
+                    break
+            except Exception as e:
+                print(f"  ⚠️ 查找 {btn_text} 按钮异常: {e}")
+
+        if not clicked:
+            # 尝试用 JS 查找
+            try:
+                result = sb.execute_script("""
+                    (function() {
+                        var btns = document.querySelectorAll('button');
+                        for (var i = 0; i < btns.length; i++) {
+                            var t = (btns[i].innerText || '').trim().toLowerCase();
+                            if (t.includes('restart') || t.includes('start')) {
+                                btns[i].click();
+                                return t;
+                            }
+                        }
+                        return null;
+                    })()
+                """)
+                if result:
+                    print(f"🖱️ JS 点击按钮: {result}")
+                    clicked = True
+                    clicked_button = result
+                    time.sleep(3)
+            except Exception as e:
+                print(f"  ⚠️ JS 查找按钮异常: {e}")
+
+        if not clicked:
+            print("  ⚠️ 未找到 start/restart 按钮，页面可能已加载完成或按钮已隐藏")
+            return False
+
+        print(f"✅ 已点击 {clicked_button} 按钮")
+        print(f"🔁 服务器 {server_id} 已在控制面板执行重启操作")
+        return True
+
+    except Exception as e:
+        print(f"  ❌ 控制面板操作异常: {e}")
+        return False
+
+
 def main():
     print("#" * 25)
     print("   Lunes 自动登录续期")
     print("#" * 25)
-    
+
     print(f"🔗 使用 SOCKS5 代理: {PROXY_URL}")
-    
+
+    # 第一步：监控隧道域名状态码
+    abnormal, normal = check_tunnel_status()
+
     with SB(uc=True, headless=False, proxy=PROXY_URL) as sb:
         print("✅ 浏览器已启动")
         try:
@@ -365,10 +484,37 @@ def main():
         except Exception:
             pass
 
+        # 进入浏览器会话后登录一次即可复用
         if login(sb):
+            # 先检查是否有异常隧道需要重启
+            if abnormal:
+                print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
+                success, info = visit_server(sb)
+                if success:
+                    server_id = info['server_id']
+                    print(f"🔧 服务器 ID: {server_id}")
+                    restart_success = restart_server_via_ctrl(sb, server_id)
+                    if restart_success:
+                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                        extra += f"\n服务器: {info['server_name']}\nID: {server_id}"
+                        send_tg_message("🔄", "隧道异常已重启", extra)
+                    else:
+                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                        extra += f"\n错误: 控制面板重启失败"
+                        send_tg_message("❌", "隧道重启失败", extra)
+                else:
+                    error_msg = info.get('error', '未知错误')
+                    print(f"❌ 访问服务器失败: {error_msg}")
+                    extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                    extra += f"\n错误: {error_msg}"
+                    send_tg_message("❌", "隧道重启失败", extra)
+
+            # 原有续期逻辑 (访问服务器页面)
             success, info = visit_server(sb)
             if success:
                 extra = f"服务器: {info['server_name']}\nID: {info['server_id']}"
+                if abnormal:
+                    extra += f"\n\n⚠️ 异常隧道已重启: {len(abnormal)} 个"
                 send_tg_message("✅", "续期成功", extra)
             else:
                 error_msg = info.get('error', '未知错误')
