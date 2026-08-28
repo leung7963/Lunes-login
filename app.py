@@ -15,7 +15,7 @@ TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""      # chat id,可选
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""    # bot token,可选
 
 LOGIN_URL = "https://betadash.lunes.host/login?next=/"
-PROXY_URL = "http://127.0.0.1:1082"  # 固定代理地址
+PROXY_URL = "socks5://127.0.0.1:1081"  # SOCKS5 代理地址
 
 #  Telegram 推送
 def send_tg_message(status_icon, status_text, extra_text=""):
@@ -355,7 +355,7 @@ def main():
     print("   Lunes 自动登录续期")
     print("#" * 25)
     
-    print(f"🔗 使用代理: {PROXY_URL}")
+    print(f"🔗 使用 SOCKS5 代理: {PROXY_URL}")
     
     with SB(uc=True, headless=False, proxy=PROXY_URL) as sb:
         print("✅ 浏览器已启动")
