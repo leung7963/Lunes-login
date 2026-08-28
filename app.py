@@ -15,6 +15,7 @@ TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""      # chat id,可选
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""    # bot token,可选
 
 LOGIN_URL = "https://betadash.lunes.host/login?next=/"
+PROXY_URL = "http://127.0.0.1:1082"  # 固定代理地址
 
 #  Telegram 推送
 def send_tg_message(status_icon, status_text, extra_text=""):
@@ -354,17 +355,9 @@ def main():
     print("   Lunes 自动登录续期")
     print("#" * 25)
     
-    is_proxy = os.environ.get("IS_PROXY", "false").lower() == "true"
-    sb_kwargs = {"uc": True, "headless": False}
+    print(f"🔗 使用代理: {PROXY_URL}")
     
-    if is_proxy:
-        proxy_str = "http://127.0.0.1:1081"
-        print(f"🔗 挂载sing-box代理: {proxy_str}")
-        sb_kwargs["proxy"] = proxy_str
-    else:
-        print("🌐 未使用代理，直连访问")
-    
-    with SB(**sb_kwargs) as sb:
+    with SB(uc=True, headless=False, proxy=PROXY_URL) as sb:
         print("✅ 浏览器已启动")
         try:
             sb.open("https://api.ip.sb/ip")
@@ -376,7 +369,7 @@ def main():
             success, info = visit_server(sb)
             if success:
                 extra = f"服务器: {info['server_name']}\nID: {info['server_id']}"
-                send_tg_message("✅", "续期成功")
+                send_tg_message("✅", "续期成功", extra)
             else:
                 error_msg = info.get('error', '未知错误')
                 print(f"❌ 访问服务器失败: {error_msg}")
