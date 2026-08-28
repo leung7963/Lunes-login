@@ -409,128 +409,142 @@ def check_tunnel_status():
     return abnormal, normal
 
 
-# 在控制面板重启服务器
-def restart_server_via_ctrl(sb, server_id):
+# 点击 Open Panel 进入控制面板并重启服务器
+def click_open_panel_and_restart(sb, server_id):
     """
-    进入 ctrl.lunes.host/server/{server_id}，点击 start 或 restart 按钮。
+    在服务器详情页 (betadash.lunes.host/servers/{id}) 点击 "Open Panel" 按钮
+    (当前页跳转到 ctrl.lunes.host 控制面板)，然后点击 start 或 restart 按钮。
     """
-    url = f"{CTRL_URL}/server/{server_id}"
-    print(f"🔧 打开控制面板: {url}")
+    print("🔧 查找 Open Panel 按钮...")
+    panel_clicked = False
 
-    try:
-        sb.open(url)
-
-        # 等待 SPA 渲染，轮询最长 30 秒
-        print("⏳ 等待控制面板页面渲染...")
-        buttons_found = []
-        for _ in range(30):
-            time.sleep(1)
-            try:
-                buttons_found = sb.find_elements("button")
-            except Exception:
-                buttons_found = []
-            if buttons_found:
-                break
-        time.sleep(2)  # extra buffer for JS
-
-        # 打印调试信息
+    # 策略1: 按钮文字匹配
+    for label in ["Open Panel", "open panel", "Open panel"]:
         try:
-            page_title = sb.get_title() or ""
-            print(f"📰 页面标题: {page_title}")
+            buttons = sb.find_elements("button")
+            for btn in buttons:
+                btn_txt = (btn.text or "").strip()
+                if btn_txt == label or label.lower() in btn_txt.lower():
+                    print(f"🖱️ 点击 Open Panel 按钮: {btn_txt}")
+                    btn.click()
+                    panel_clicked = True
+                    time.sleep(3)
+                    break
+            if panel_clicked:
+                break
+        except Exception as e:
+            print(f"  ⚠️ 查找 Open Panel 按钮异常: {e}")
+
+    # 策略2: 用 JS 查找 (button / a / 含 title 的元素)
+    if not panel_clicked:
+        try:
+            result = sb.execute_script("""
+                (function() {
+                    var elems = document.querySelectorAll('button, a, [role="button"], [title]');
+                    for (var i = 0; i < elems.length; i++) {
+                        var t = (elems[i].innerText || elems[i].textContent || elems[i].getAttribute('title') || '').trim().toLowerCase();
+                        if (t.includes('open panel') || t.includes('open-panel') || (t === 'panel')) {
+                            elems[i].scrollIntoView({block: 'center'});
+                            elems[i].click();
+                            return t;
+                        }
+                    }
+                    return null;
+                })()
+            """)
+            if result:
+                print(f"🖱️ JS 点击 Open Panel: {result}")
+                panel_clicked = True
+                time.sleep(3)
+        except Exception as e:
+            print(f"  ⚠️ JS 查找 Open Panel 异常: {e}")
+
+    if not panel_clicked:
+        print("  ⚠️ 未找到 Open Panel 按钮，跳过重启")
+        return False
+
+    # 等待跳转到 ctrl 控制面板
+    print("⏳ 等待跳转到控制面板...")
+    for _ in range(15):
+        time.sleep(1)
+        cur_url = ""
+        try:
+            cur_url = sb.get_current_url().lower()
+            if "ctrl.lunes.host" in cur_url:
+                print(f"📍 已跳转控制面板: {cur_url}")
+                break
         except Exception:
             pass
+    else:
+        print(f"  ⚠️ 未跳转到 ctrl 面板，当前 URL: {cur_url if cur_url else '未知'}")
 
-        clicked_button = None
-        clicked = False
+    # 等待 SPA 渲染按钮
+    for _ in range(30):
+        time.sleep(1)
+        try:
+            if sb.find_elements("button"):
+                break
+        except Exception:
+            pass
+    time.sleep(2)
 
-        # === 优先策略 1: 匹配按钮文字 ===
-        for btn_text in ["restart", "Restart", "RESTART", "start", "Start", "START"]:
-            try:
-                buttons = sb.find_elements("button")
-                for btn in buttons:
-                    btn_txt = (btn.text or "").strip()
-                    if btn_txt.lower() == btn_text.lower() or btn_text.lower() in btn_txt.lower():
-                        print(f"🖱️ 点击按钮: {btn_txt}")
-                        btn.click()
-                        clicked = True
-                        clicked_button = btn_txt
-                        time.sleep(3)
-                        break
-                if clicked:
+    # === 在控制面板点击 start/restart ===
+    clicked_button = None
+    clicked = False
+
+    for btn_text in ["restart", "Restart", "RESTART", "start", "Start", "START"]:
+        try:
+            buttons = sb.find_elements("button")
+            for btn in buttons:
+                btn_txt = (btn.text or "").strip()
+                if btn_txt.lower() == btn_text.lower() or btn_text.lower() in btn_txt.lower():
+                    print(f"🖱️ 点击按钮: {btn_txt}")
+                    btn.click()
+                    clicked = True
+                    clicked_button = btn_txt
+                    time.sleep(3)
                     break
-            except Exception as e:
-                print(f"  ⚠️ 查找 {btn_text} 按钮异常: {e}")
+            if clicked:
+                break
+        except Exception as e:
+            print(f"  ⚠️ 查找 {btn_text} 按钮异常: {e}")
 
-        # === 策略 2: 用 JS 查找按钮 (textContent / innerText) ===
-        if not clicked:
-            try:
-                result = sb.execute_script("""
-                    (function() {
-                        // 查找所有按钮、a 标签、i 标签
-                        var elems = document.querySelectorAll('button, a, [role="button"], i, svg');
-                        for (var i = 0; i < elems.length; i++) {
-                            var t = (elems[i].innerText || elems[i].textContent || elems[i].getAttribute('title') || '').trim().toLowerCase();
-                            if (t.includes('restart') || t.includes('start') || t.includes('power')) {
-                                elems[i].scrollIntoView({block: 'center'});
-                                elems[i].click();
-                                return t;
-                            }
+    if not clicked:
+        try:
+            result = sb.execute_script("""
+                (function() {
+                    var elems = document.querySelectorAll('button, a, [role="button"], i, svg');
+                    for (var i = 0; i < elems.length; i++) {
+                        var t = (elems[i].innerText || elems[i].textContent || elems[i].getAttribute('title') || '').trim().toLowerCase();
+                        if (t.includes('restart') || t.includes('start') || t.includes('power')) {
+                            elems[i].scrollIntoView({block: 'center'});
+                            elems[i].click();
+                            return t;
                         }
-                        return null;
-                    })()
-                """)
-                if result:
-                    print(f"🖱️ JS 点击按钮: {result}")
-                    clicked = True
-                    clicked_button = result
-                    time.sleep(3)
-            except Exception as e:
-                print(f"  ⚠️ JS 查找按钮异常: {e}")
+                    }
+                    return null;
+                })()
+            """)
+            if result:
+                print(f"🖱️ JS 点击按钮: {result}")
+                clicked = True
+                clicked_button = result
+                time.sleep(3)
+        except Exception as e:
+            print(f"  ⚠️ JS 查找按钮异常: {e}")
 
-        # === 策略 3: 点击任何 class/id 含 'restart'/'start' 的元素 ===
-        if not clicked:
-            try:
-                result = sb.execute_script("""
-                    (function() {
-                        var elems = document.querySelectorAll('[class*="restart"], [class*="start"], [class*="Start"], [id*="restart"], [id*="start"]');
-                        elems.forEach(function(el) { el.scrollIntoView({block: 'center'}); });
-                        if (elems.length > 0) {
-                            elems[0].click();
-                            return elems[0].tagName + '.' + elems[0].className;
-                        }
-                        return null;
-                    })()
-                """)
-                if result:
-                    print(f"🖱️ JS 点击 class/id 匹配元素: {result}")
-                    clicked = True
-                    clicked_button = result
-                    time.sleep(3)
-            except Exception as e:
-                print(f"  ⚠️ JS class/id 查找异常: {e}")
-
-        if not clicked:
-            # 输出调试信息
-            print("  ⚠️ 未找到 start/restart 按钮")
-            print("  --- 调试：页面来源 (前500字) ---")
-            src = sb.get_page_source() or ""
-            print(src[:500])
-            print("  --- 调试：所有按钮 ---")
+    if not clicked:
+        print("  ⚠️ 未找到 start/restart 按钮")
+        try:
             for btn in sb.find_elements("button"):
                 print(f"    button: text={btn.text[:50]!r} class={btn.get_attribute('class')[:80]!r}")
-            return False
-
-        print(f"✅ 已点击 {clicked_button} 按钮")
-        print(f"🔁 服务器 {server_id} 已在控制面板执行重启操作")
-        return True
-
-    except Exception as e:
-        print(f"  ❌ 控制面板操作异常: {e}")
-        try:
-            sb.save_screenshot("ctrl_panel_fail.png")
         except Exception:
             pass
         return False
+
+    print(f"✅ 已点击 {clicked_button} 按钮")
+    print(f"🔁 服务器 {server_id} 已在控制面板执行重启操作")
+    return True
 
 def main():
     print("#" * 25)
@@ -570,7 +584,7 @@ def main():
             # 如果存在异常隧道，进入控制面板执行重启
             if abnormal:
                 print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
-                restart_success = restart_server_via_ctrl(sb, server_id)
+                restart_success = click_open_panel_and_restart(sb, server_id)
                 if restart_success:
                     extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
                     extra += f"\n服务器: {server_name}\nID: {server_id}"
