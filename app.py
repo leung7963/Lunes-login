@@ -409,6 +409,114 @@ def check_tunnel_status():
     return abnormal, normal
 
 
+# 在 ctrl 控制面板登录 (若需要)
+def login_ctrl(sb) -> bool:
+    """
+    检查当前 ctrl 页面是否需要单独登录，若需要则填写邮箱/密码并提交。
+    Pterodactyl 控制面板通常有独立的登录页 (ctrl.lunes.host/auth/login)。
+    """
+    print("🔐 检查 ctrl 控制面板是否需要登录...")
+    time.sleep(2)
+
+    # 判断是否处于登录页 / 是否有登录表单
+    page_src = ""
+    try:
+        page_src = sb.get_page_source() or ""
+    except Exception:
+        pass
+    cur_url = ""
+    try:
+        cur_url = sb.get_current_url().lower()
+    except Exception:
+        pass
+
+    is_login_page = "login" in cur_url or "auth" in cur_url
+    has_form = ('name="email"' in page_src.lower()
+                or 'name="username"' in page_src.lower()
+                or 'type="password"' in page_src.lower())
+
+    if not is_login_page and not has_form:
+        print("✅ ctrl 控制面板已登录，无需重复登录")
+        return True
+
+    print(f"📍 ctrl 需要登录 (URL: {cur_url or '未知'})")
+
+    # 填写账号
+    filled = False
+    for sel in ['input[name="email"]', 'input[name="username"]', 'input[type="email"]',
+                'input[type="text"]']:
+        try:
+            if sb.find_elements(sel):
+                js_fill_input(sb, sel, EMAIL)
+                print(f"  ✅ 填写账号: {sel}")
+                filled = True
+                break
+        except Exception:
+            continue
+
+    # 填写密码
+    pw_done = False
+    try:
+        if sb.find_elements('input[type="password"]'):
+            js_fill_input(sb, 'input[type="password"]', PASSWORD)
+            pw_done = True
+            print("  ✅ 填写密码")
+    except Exception:
+        pass
+
+    if not filled or not pw_done:
+        print("  ⚠️ 未找到登录表单字段，可能页面结构不同")
+        return False
+
+    time.sleep(0.5)
+
+    # 处理可能的 Turnstile
+    try:
+        if sb.execute_script(_EXISTS_JS):
+            if not handle_turnstile(sb):
+                print("  ⚠️ ctrl 登录 Turnstile 未通过，继续尝试提交")
+    except Exception:
+        pass
+
+    # 提交登录
+    submitted = False
+    for sel in ['button[type="submit"]', 'input[type="submit"]',
+                'button:has-text("Login")', 'button:has-text("Sign in")']:
+        try:
+            if sb.find_elements(sel):
+                sb.click(sel)
+                submitted = True
+                break
+        except Exception:
+            continue
+
+    if not submitted:
+        try:
+            sub = sb.execute_script(
+                "(function(){var b=document.querySelectorAll('button');"
+                "for(var i=0;i<b.length;i++){var t=(b[i].textContent||'').trim().toLowerCase();"
+                "if(t.indexOf('login')>=0||t.indexOf('sign in')>=0){b[i].click();return true;}}"
+                "return false;})()")
+            if sub:
+                submitted = True
+        except Exception:
+            pass
+
+    print("⏳ 等待 ctrl 登录跳转...")
+    for _ in range(15):
+        time.sleep(1)
+        try:
+            c = sb.get_current_url().lower()
+            if "login" not in c and "auth" not in c:
+                print(f"✅ ctrl 登录成功 (URL: {c})")
+                return True
+        except Exception:
+            pass
+
+    print("  ⚠️ ctrl 登录跳转未确认，继续尝试操作")
+    return True
+
+
 # 点击 Open Panel 进入控制面板并重启服务器
 def click_open_panel_and_restart(sb, server_id):
     """
@@ -508,6 +616,9 @@ def click_open_panel_and_restart(sb, server_id):
         if m:
             uuid = m.group(1)
             print(f"🔑 从href提取 uuid: {uuid}")
+
+    # ctrl 控制面板可能要求单独登录
+    login_ctrl(sb)
 
     # 等待 SPA 渲染按钮
     for _ in range(30):
