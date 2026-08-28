@@ -353,12 +353,14 @@ def visit_server(sb) -> (bool, dict):
     return True, {"server_id": server_id, "server_name": server_name}
 
 # 监控隧道域名状态码
+# 检查 3 次，全部返回非 404 才判定为异常
 def check_tunnel_status():
     """
     监控隧道域名状态码。
     返回: (异常域名列表, 正常域名列表)
     - 状态码 != 404 视为异常（隧道挂了/重定向/其他错误）
-    - 状态码 == 404 视为正常（隧道正常，Cloudflare 404）
+    - 状态码 == 404 视为正常（隧道正常， Cloudflare 404）
+    每个域名检查 3 次，仅当全部 3 次均为非 404 时才判定为异常
     """
     if not TUNNEL_DOMAIN:
         print("ℹ️ 未配置 TUNNEL_DOMAIN，跳过隧道监控。")
@@ -374,26 +376,35 @@ def check_tunnel_status():
     print(f"🔍 开始监控 {len(domains)} 个隧道域名...")
 
     for domain in domains:
-        # 确保有协议前缀
         url = domain if domain.startswith(('http://', 'https://')) else f"https://{domain}"
-        try:
-            # 禁用代理，直连检查（隧道域名通常需要直连）
-            r = requests.get(url, timeout=10, proxies={"http": None, "https": None}, allow_redirects=True, verify=False)
-            status = r.status_code
-            print(f"  📡 {domain} -> HTTP {status}")
-            if status == 404:
-                normal.append(domain)
-                print(f"    ✅ 状态码 404，隧道正常，跳过")
-            else:
-                abnormal.append(domain)
-                print(f"    ⚠️ 状态码 {status}，隧道异常，需要重启")
-        except requests.exceptions.SSLError:
-            # SSL 错误也视为异常（可能证书过期或隧道问题）
+        non_404_count = 0
+        last_status = None
+        for attempt in range(3):
+            try:
+                r = requests.get(url, timeout=10, proxies={"http": None, "https": None}, allow_redirects=True, verify=False)
+                status = r.status_code
+                last_status = status
+                print(f"  📡 {domain} (第{attempt+1}次) -> HTTP {status}")
+                if status != 404:
+                    non_404_count += 1
+            except requests.exceptions.SSLError:
+                non_404_count += 1
+                last_status = "SSL_ERROR"
+                print(f"  📡 {domain} (第{attempt+1}次) -> SSL 错误")
+            except Exception as e:
+                non_404_count += 1
+                last_status = "REQUEST_ERROR"
+                print(f"  📡 {domain} (第{attempt+1}次) -> 请求异常: {e}")
+            time.sleep(1)  # 间隔1秒再检查
+
+        if non_404_count == 3:
+            # 全部 3 次均为非 404 → 异常
             abnormal.append(domain)
-            print(f"  📡 {domain} -> SSL 错误，隧道异常，需要重启")
-        except Exception as e:
-            abnormal.append(domain)
-            print(f"  📡 {domain} -> 请求异常: {e}，隧道异常，需要重启")
+            print(f"    ⚠️ {domain} 状态码连续 3 次非 404（最后: {last_status}），隧道异常，需要重启")
+        else:
+            # 至少有一次 404 → 判定正常
+            normal.append(domain)
+            print(f"    ✅ {domain} 状态码有 404，隧道正常，跳过")
 
     return abnormal, normal
 
@@ -465,7 +476,6 @@ def restart_server_via_ctrl(sb, server_id):
         print(f"  ❌ 控制面板操作异常: {e}")
         return False
 
-
 def main():
     print("#" * 25)
     print("   Lunes 自动登录续期")
@@ -473,7 +483,7 @@ def main():
 
     print(f"🔗 使用 SOCKS5 代理: {PROXY_URL}")
 
-    # 第一步：监控隧道域名状态码
+    # 第一步：监控隧道域名状态码（检查 3 次，全部非 404 才为异常）
     abnormal, normal = check_tunnel_status()
 
     with SB(uc=True, headless=False, proxy=PROXY_URL) as sb:
@@ -484,48 +494,48 @@ def main():
         except Exception:
             pass
 
-        # 进入浏览器会话后登录一次即可复用
+        # 登录一次即可复用
         if login(sb):
-            # 先检查是否有异常隧道需要重启
-            if abnormal:
-                print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
-                success, info = visit_server(sb)
-                if success:
-                    server_id = info['server_id']
-                    print(f"🔧 服务器 ID: {server_id}")
-                    restart_success = restart_server_via_ctrl(sb, server_id)
-                    if restart_success:
-                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-                        extra += f"\n服务器: {info['server_name']}\nID: {server_id}"
-                        send_tg_message("🔄", "隧道异常已重启", extra)
-                    else:
-                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-                        extra += f"\n错误: 控制面板重启失败"
-                        send_tg_message("❌", "隧道重启失败", extra)
-                else:
-                    error_msg = info.get('error', '未知错误')
-                    print(f"❌ 访问服务器失败: {error_msg}")
-                    extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-                    extra += f"\n错误: {error_msg}"
-                    send_tg_message("❌", "隧道重启失败", extra)
-
-            # 原有续期逻辑 (访问服务器页面)
+            # 获取服务器 ID（一次）
             success, info = visit_server(sb)
-            if success:
-                extra = f"服务器: {info['server_name']}\nID: {info['server_id']}"
-                if abnormal:
-                    extra += f"\n\n⚠️ 异常隧道已重启: {len(abnormal)} 个"
-                send_tg_message("✅", "续期成功", extra)
-            else:
+            if not success:
                 error_msg = info.get('error', '未知错误')
                 print(f"❌ 访问服务器失败: {error_msg}")
                 extra = f"错误: {error_msg}"
                 if 'server_id' in info:
                     extra += f"\n服务器ID: {info['server_id']}"
                 send_tg_message("❌", "续期失败", extra)
+                return
+
+            server_id = info['server_id']
+            server_name = info['server_name']
+            print(f"🔧 服务器: {server_name} (ID: {server_id})")
+
+            # 如果存在异常隧道，进入控制面板执行重启
+            if abnormal:
+                print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
+                restart_success = restart_server_via_ctrl(sb, server_id)
+                if restart_success:
+                    extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                    extra += f"\n服务器: {server_name}\nID: {server_id}"
+                    send_tg_message("🔄", "隧道异常已重启", extra)
+                else:
+                    extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                    extra += f"\n错误: 控制面板重启失败"
+                    send_tg_message("❌", "隧道重启失败", extra)
+
+            # 原有续期逻辑
+            extra = f"服务器: {server_name}\nID: {server_id}"
+            if abnormal:
+                extra += f"\n\n⚠️ 异常隧道已重启: {len(abnormal)} 个"
+            send_tg_message("✅", "续期成功", extra)
         else:
             print("\n❌ 登录失败，终止后续续期操作。")
-            send_tg_message("❌", "登录失败", "")
+            extra = ""
+            if abnormal:
+                extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                extra += "\n登录失败，隧道未重启"
+            send_tg_message("❌", "登录失败", extra)
 
 if __name__ == "__main__":
     main()
