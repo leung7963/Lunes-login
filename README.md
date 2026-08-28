@@ -15,7 +15,7 @@
 || NODE_LINK       | ❌ 可选  | 代理链接或订阅，如 vless:// ss:// vmess:// trojan:// ... 或 https://sub.example.com/token |
 || TG_BOT_TOKEN    | ❌ 可选  | Telegram Bot Token（用于发送通知）                     |
 || TG_CHAT_ID      | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID）              |
-|| TUNNEL_DOMAIN   | ❌ 可选  | 隧道域名（逗号分隔），如 `lunes.0662.ip-ddns.com`。脚本会自动检查状态码，404=正常跳过，非404=自动重启服务器 |
+|| TUNNEL_DOMAIN   | ❌ 可选  | 隧道域名（逗号分隔），脚本会自动检查状态码，404=正常跳过，非404=自动重启服务器 |
 
 ---
 
