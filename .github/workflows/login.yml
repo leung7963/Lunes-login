@@ -55,6 +55,13 @@ jobs:
           
           # 验证状态
           sudo warp-cli --accept-tos status
+
+      - name: Convert SOCKS5 to HTTP proxy using socat
+        run: |
+          sudo apt-get install -y socat
+          # 监听 1082 端口，将 HTTP 请求转发到 SOCKS5
+          nohup socat TCP4-LISTEN:1082,fork PROXY:127.0.0.1:127.0.0.1:1081 &
+          echo "HTTP proxy available at http://127.0.0.1:1082"
  
       - name: 🚀 运行续期脚本
         env:
