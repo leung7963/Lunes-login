@@ -34,15 +34,22 @@ jobs:
         #run: |
           #bash <(wget -qO- https://raw.githubusercontent.com/leung7963/other/main/proxy.sh)
 
-      - name: Install Cloudflare WARP
+      - name: Install and configure Cloudflare WARP (IPv4 only)
         run: |
+          # 禁用IPv6
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+          echo "net.ipv6.conf.all.disable_ipv6=1" | sudo tee -a /etc/sysctl.conf
+          echo "net.ipv6.conf.default.disable_ipv6=1" | sudo tee -a /etc/sysctl.conf
+          
+          # 安装WARP
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt-get update && sudo apt-get install -y cloudflare-warp
+          
+          # 注册并连接
           sudo warp-cli --accept-tos registration new
-          # 设置仅使用IPv4
-          sudo warp-cli --accept-tos settings set allowed-ips "0.0.0.0/0"
-          sudo warp-cli --accept-tos settings set exclude-ips "::/0"
           sudo warp-cli --accept-tos connect
  
       - name: 🚀 运行续期脚本
