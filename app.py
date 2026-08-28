@@ -518,24 +518,23 @@ def login_ctrl(sb) -> bool:
 
 
 # 点击 Open Panel 进入控制面板并重启服务器
+# 点击 Open Panel 进入控制面板并重启服务器
 def click_open_panel_and_restart(sb, server_id):
     """
-    在服务器详情页 (betadash.lunes.host/servers/{id}) 点击 "Open Panel" 按钮
-    (当前页跳转到 ctrl.lunes.host/server/{uuid} 控制面板)，然后点击 start 或 restart 按钮。
-    流程: 提取 uuid -> 点击 Open Panel -> 确认到达 ctrl.lunes.host -> 点击 start/restart
+    在服务器详情页 (betadash.lunes.host/servers/{id}) 点击 Open Panel,
+    进入 ctrl 控制面板, 若需登录则登录, 解析真实 uuid,
+    确认导航到 ctrl.lunes.host/server/{uuid}, 再点击 start/restart.
     """
     print("🔧 查找 Open Panel 按钮...")
     panel_clicked = False
-    open_panel_href = None
 
-    # 策略1: 按钮文字匹配 (同时提取 href 中的 uuid)
+    # 策略1: 按钮文字匹配 (只点击, 不依赖 href, 避免模板 {uuid} 被编码)
     for label in ["Open Panel", "open panel", "Open panel"]:
         try:
             buttons = sb.find_elements("button")
             for btn in buttons:
                 btn_txt = (btn.text or "").strip()
                 if btn_txt == label or label.lower() in btn_txt.lower():
-                    open_panel_href = btn.get_attribute('href')
                     print(f"🖱️ 点击 Open Panel 按钮: {btn_txt}")
                     btn.click()
                     panel_clicked = True
@@ -546,7 +545,7 @@ def click_open_panel_and_restart(sb, server_id):
         except Exception as e:
             print(f"  ⚠️ 查找 Open Panel 按钮异常: {e}")
 
-    # 策略2: 用 JS 查找 (button / a / 含 title 的元素)
+    # 策略2: 用 JS 查找并点击
     if not panel_clicked:
         try:
             result = sb.execute_script("""
@@ -589,59 +588,79 @@ def click_open_panel_and_restart(sb, server_id):
         except Exception:
             pass
 
-    # 若 Open Panel 点击后未跳转，但已提取到含 uuid 的 href，则直接导航
     if not arrived:
-        if open_panel_href and "ctrl.lunes.host/server/" in open_panel_href.lower():
-            print(f"🧭 点击未跳转，改用 href 直接打开: {open_panel_href}")
-            try:
-                sb.open(open_panel_href)
-                cur_url = open_panel_href.lower()
-                arrived = True
-            except Exception as e:
-                print(f"  ⚠️ 直接打开 href 异常: {e}")
-        else:
-            print(f"  ⚠️ 未跳转到 ctrl 面板，当前 URL: {cur_url if cur_url else '未知'}")
-
-    # 从 ctrl URL 提取 uuid
-    uuid = None
-    if "ctrl.lunes.host/server/" in cur_url:
-        m = re.search(r'/server/([0-9a-fA-F-]+)', cur_url)
-        if m:
-            uuid = m.group(1)
-            print(f"🔑 控制面板 uuid: {uuid}")
-        else:
-            print(f"  ⚠️ 无法从URL解析uuid: {cur_url}")
-    elif open_panel_href:
-        m = re.search(r'/server/([0-9a-fA-F-]+)', open_panel_href)
-        if m:
-            uuid = m.group(1)
-            print(f"🔑 从href提取 uuid: {uuid}")
+        print("  ⚠️ 未跳转到 ctrl 面板，当前 URL: " + (cur_url or '未知'))
 
     # ctrl 控制面板可能要求单独登录
     login_ctrl(sb)
 
-    # 登录成功后，重新确认导航到目标 URL ctrl.lunes.host/server/{uuid}
-    if uuid:
-        target_url = f"https://ctrl.lunes.host/server/{uuid}"
-        confirmed = False
-        print(f"🧭 登录后确认导航到: {target_url}")
-        for _ in range(10):
-            time.sleep(1)
+    # 解析真实 uuid (优先从登录后 URL, 其次用 Pterodactyl 客户端 API)
+    uuid = None
+    # 1) 从当前 URL 提取
+    try:
+        u = sb.get_current_url().lower()
+        m = re.search(r'/server/([0-9a-fA-F-]{8,36})', u)
+        if m:
+            uuid = m.group(1)
+            print(f"🔑 从URL提取 uuid: {uuid}")
+    except Exception:
+        pass
+
+    # 2) 用 API 查询客户端服务器列表获取真实 uuid
+    if not uuid:
+        print("🧭 尝试通过 ctrl API 获取服务器真实 uuid")
+        try:
+            api_url = f"{CTRL_URL}/api/client"
+            sb.open(api_url)
+            time.sleep(3)
+            body = sb.get_text('body') or ''
+            import json as _json
+            # 尝试解析 JSON
             try:
-                cur = sb.get_current_url().split('?')[0].rstrip('/')
-                if cur == target_url or cur.endswith(f"/server/{uuid}"):
-                    print(f"✅ 已确认在目标页面: {cur}")
-                    confirmed = True
-                    break
+                data = _json.loads(body)
+                servers = (data.get('data') or [])
+                for s in servers:
+                    attrs = (s.get('attributes') or {})
+                    suuid = attrs.get('uuid')
+                    if suuid:
+                        uuid = suuid
+                        print(f"🔑 API 获取 uuid: {uuid} (server: {attrs.get('name')})")
+                        break
             except Exception:
-                pass
-        if not confirmed:
-            print(f"🔄 未在目标页面，重新导航: {target_url}")
-            try:
-                sb.open(target_url)
-                time.sleep(3)
-            except Exception as e:
-                print(f"  ⚠️ 重新导航异常: {e}")
+                # 非 JSON (如登录后重定向到 SPA), 尝试从页面/网络捕获
+                # 从 pre 块或 body 中抓 uuid 形态
+                mu = re.findall(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', body)
+                if mu:
+                    uuid = mu[0]
+                    print(f"🔑 从页面提取 uuid: {uuid}")
+        except Exception as e:
+            print(f"  ⚠️ API 获取 uuid 异常: {e}")
+
+    if not uuid:
+        print("  ⚠️ 无法获取服务器真实 uuid，跳过重启")
+        return False
+
+    # 确认导航到目标 URL ctrl.lunes.host/server/{uuid}
+    target_url = f"{CTRL_URL}/server/{uuid}"
+    confirmed = False
+    print(f"🧭 确认导航到: {target_url}")
+    for _ in range(10):
+        time.sleep(1)
+        try:
+            cur = sb.get_current_url().split('?')[0].rstrip('/')
+            if cur == target_url or cur.endswith(f"/server/{uuid}"):
+                print(f"✅ 已确认在目标页面: {cur}")
+                confirmed = True
+                break
+        except Exception:
+            pass
+    if not confirmed:
+        print(f"🔄 未在目标页面，重新导航: {target_url}")
+        try:
+            sb.open(target_url)
+            time.sleep(3)
+        except Exception as e:
+            print(f"  ⚠️ 重新导航异常: {e}")
 
     # 等待 SPA 渲染按钮
     for _ in range(30):
@@ -708,8 +727,10 @@ def click_open_panel_and_restart(sb, server_id):
         return False
 
     print(f"✅ 已点击 {clicked_button} 按钮")
-    print(f"🔁 服务器 {server_id} 已在控制面板执行重启操作")
+    print(f"🔁 服务器 {server_id} (uuid: {uuid}) 已在控制面板执行重启操作")
     return True
+
+
 
 def main():
     print("#" * 25)
