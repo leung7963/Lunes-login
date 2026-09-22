@@ -330,9 +330,22 @@ def login(sb) -> bool:
 
     if sb.execute_script(_EXISTS_JS):
         if not handle_turnstile(sb):
-            print("❌ 登录界面的 Turnstile 验证失败")
-            sb.save_screenshot("login_turnstile_fail.png")
-            return False
+            print("⚠️ 首次 Turnstile 验证失败，刷新页面重试...")
+            sb.refresh()
+            time.sleep(5)
+            # 再次填写表单
+            try:
+                js_fill_input(sb, 'input[name="email"]', EMAIL)
+                time.sleep(0.3)
+                js_fill_input(sb, 'input[name="password"]', PASSWORD)
+                time.sleep(1)
+            except Exception:
+                pass
+            if sb.execute_script(_EXISTS_JS):
+                if not handle_turnstile(sb):
+                    print("❌ 登录界面的 Turnstile 验证失败（重试后仍失败）")
+                    sb.save_screenshot("login_turnstile_fail.png")
+                    return False
     else:
         print("ℹ️ 未检测到 Turnstile")
 
@@ -340,31 +353,117 @@ def login(sb) -> bool:
     sb.click('button[type="submit"]')
 
     print("⏳ 等待登录跳转...")
-    for _ in range(12):
-        time.sleep(1)
-        cur_url = sb.get_current_url().split('?')[0].lower()
-        page_title = sb.get_title() or ""
-        if cur_url.startswith("https://betadash.lunes.host") or "Lunes host | Account page" in page_title.lower():
-            break
+    time.sleep(5)  # 给页面跳转和 Cloudflare 验证更多时间
 
+    # 多次检查登录状态
+    for check_round in range(3):
+        cur_url = sb.get_current_url().split('?')[0].lower()
+        page_title = (sb.get_title() or "").lower()
+        page_src = (sb.get_page_source() or "").lower()
+
+        # 判断是否还在 Cloudflare challenge 页面
+        if 'challenge' in page_src or 'cf-challenge' in page_src or 'just a moment' in page_title:
+            print(f"  ⏳ 第 {check_round+1} 次检查: 仍在 Cloudflare 验证页面，等待...")
+            time.sleep(5)
+            continue
+
+        # 判断是否登录成功（多种条件）
+        is_dashboard = (
+            "login" not in cur_url
+            and cur_url.startswith("https://betadash.lunes.host")
+            and cur_url != "https://betadash.lunes.host/login"
+        )
+        has_account_indicator = (
+            "account" in page_title
+            or "dashboard" in page_title
+            or "server" in page_title
+            or 'name="email"' not in page_src  # 登录表单消失了
+        )
+
+        if is_dashboard and has_account_indicator:
+            print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {sb.get_title()})")
+            return True
+
+        # 如果 URL 不再是 login 页，也算成功
+        if "login" not in cur_url and "betadash.lunes.host" in cur_url:
+            print(f"✅ 登录成功（URL 已跳转）(URL: {sb.get_current_url()}, Title: {sb.get_title()})")
+            return True
+
+        print(f"  ⏳ 第 {check_round+1} 次检查: URL={cur_url}, Title={sb.get_title()}")
+        time.sleep(3)
+
+    # 最终检查
     cur_url = sb.get_current_url().split('?')[0].lower()
-    page_title = sb.get_title() or ""
-    if "login" not in cur_url and "account" in page_title.lower():
-        print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
+    page_title = (sb.get_title() or "").lower()
+    if "login" not in cur_url:
+        print(f"✅ 登录成功（最终确认）(URL: {sb.get_current_url()}, Title: {sb.get_title()})")
         return True
-        
-    print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
+
+    print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {sb.get_title()})")
     sb.save_screenshot("login_failed.png")
     return False
 
 # 访问服务器页面
 def visit_server(sb) -> (bool, dict):
     print("🔍 正在查找服务器卡片...")
+    print(f"  当前 URL: {sb.get_current_url()}")
+    print(f"  当前标题: {sb.get_title()}")
+
+    # 等待页面完全加载
+    time.sleep(5)
+
+    # 先尝试滚动页面触发懒加载
     try:
-        sb.wait_for_element('a.server-card', timeout=15)
+        sb.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(2)
+        sb.execute_script("window.scrollTo(0, 0)")
+        time.sleep(1)
     except Exception:
-        print("❌ 未找到服务器卡片（可能没有服务器）")
-        return False, {"error": "未找到服务器卡片，可能账户无服务器"}
+        pass
+
+    # 检查是否又跳回了 Cloudflare 或登录页
+    cur_url = sb.get_current_url().lower()
+    if "challenge" in cur_url or "login" in cur_url:
+        print(f"  ⚠️ 页面被重定向到: {cur_url}")
+        return False, {"error": f"页面被重定向: {sb.get_current_url()}"}
+
+    try:
+        sb.wait_for_element('a.server-card', timeout=20)
+    except Exception:
+        # 尝试其他可能的选择器
+        print("  ⚠️ 未找到 a.server-card，尝试其他选择器...")
+        for selector in ['a[href*="/servers/"]', '.server', '[class*="server"]']:
+            try:
+                elements = sb.find_elements(selector)
+                if elements:
+                    print(f"  ✅ 找到 {len(elements)} 个元素 (selector: {selector})")
+                    # 用第一个元素作为 card
+                    card = elements[0]
+                    href = card.get_attribute('href')
+                    if href:
+                        match = re.search(r'/servers/(\d+)', href)
+                        if match:
+                            server_id = match.group(1)
+                            print(f"🖱️ 点击服务器 (ID: {server_id})")
+                            card.click()
+                            time.sleep(3)
+                            return True, {"server_id": server_id, "server_name": f"ID {server_id}"}
+            except Exception:
+                continue
+
+        # 输出页面内容帮助调试
+        print("  📄 页面内容预览:")
+        try:
+            body_text = sb.execute_script("return document.body.innerText") or ""
+            for line in body_text.split('\n')[:15]:
+                line = line.strip()
+                if line:
+                    print(f"    {line[:80]}")
+        except Exception:
+            pass
+
+        sb.save_screenshot("no_server_cards.png")
+        return False, {"error": "未找到服务器卡片，可能账户无服务器或页面未加载完成"}
 
     cards = sb.find_elements('a.server-card')
     if not cards:
