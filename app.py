@@ -27,26 +27,42 @@ def regenerate_warp_ip():
     """断开 WARP 并重新连接以获取新的出口 IP"""
     print("🔄 正在重新获取 WARP IP...")
     try:
+        # 先检查 WARP 状态
+        result = subprocess.run(["sudo", "warp-cli", "--accept-tos", "status"],
+                                capture_output=True, text=True, timeout=5)
+        print(f"  当前 WARP 状态: {result.stdout.strip()}")
+
         # 断开连接
-        subprocess.run(["sudo", "warp-cli", "--accept-tos", "disconnect"],
-                       capture_output=True, timeout=10)
+        print("  📴 断开 WARP...")
+        r = subprocess.run(["sudo", "warp-cli", "--accept-tos", "disconnect"],
+                           capture_output=True, text=True, timeout=10)
+        print(f"    disconnect: {r.stdout.strip()} {r.stderr.strip()}")
         time.sleep(3)
 
-        # 重新注册（获取新 IP 的关键步骤）
-        subprocess.run(["sudo", "warp-cli", "--accept-tos", "registration new"],
-                       capture_output=True, timeout=10)
+        # 删除旧注册，重新注册（获取新 IP 的关键步骤）
+        print("  🗑️ 删除旧注册...")
+        subprocess.run(["sudo", "warp-cli", "--accept-tos", "registration delete"],
+                       capture_output=True, text=True, timeout=10)
+        time.sleep(2)
+
+        print("  📝 重新注册...")
+        r = subprocess.run(["sudo", "warp-cli", "--accept-tos", "registration new"],
+                           capture_output=True, text=True, timeout=10)
+        print(f"    register: {r.stdout.strip()} {r.stderr.strip()}")
         time.sleep(2)
 
         # 重新连接
-        subprocess.run(["sudo", "warp-cli", "--accept-tos", "connect"],
-                       capture_output=True, timeout=10)
+        print("  📶 重新连接 WARP...")
+        r = subprocess.run(["sudo", "warp-cli", "--accept-tos", "connect"],
+                           capture_output=True, text=True, timeout=10)
+        print(f"    connect: {r.stdout.strip()} {r.stderr.strip()}")
         time.sleep(5)
 
         # 验证状态
         result = subprocess.run(["sudo", "warp-cli", "--accept-tos", "status"],
                                 capture_output=True, text=True, timeout=5)
         status = result.stdout.strip()
-        print(f"  WARP 状态: {status}")
+        print(f"  WARP 最终状态: {status}")
 
         if "Connected" in status or "connected" in status:
             print("✅ WARP 重新连接成功")
@@ -894,7 +910,6 @@ def main():
 
     # 登录重试逻辑：Turnstile 失败时重新获取 WARP IP 再试
     login_success = False
-    sb_instance = None
 
     for warp_attempt in range(MAX_WARP_RETRIES + 1):
         if warp_attempt > 0:
@@ -906,7 +921,6 @@ def main():
             time.sleep(3)
 
         with SB(uc=True, headless=False, proxy=PROXY_URL) as sb:
-            sb_instance = sb
             print(f"\n{'='*40}")
             print(f"📋 尝试登录（第 {warp_attempt + 1}/{MAX_WARP_RETRIES + 1} 次）")
             print(f"{'='*40}")
@@ -919,54 +933,65 @@ def main():
 
             if login(sb):
                 login_success = True
-                break
+
+                # 在同一个 with 块内完成所有浏览器操作
+                success, info = visit_server(sb)
+                if not success:
+                    error_msg = info.get('error', '未知错误')
+                    print(f"❌ 访问服务器失败: {error_msg}")
+                    extra = f"错误: {error_msg}"
+                    if 'server_id' in info:
+                        extra += f"\n服务器ID: {info['server_id']}"
+                    send_tg_message("❌", "续期失败", extra)
+                    return
+
+                server_id = info['server_id']
+                server_name = info['server_name']
+                print(f"🔧 服务器: {server_name} (ID: {server_id})")
+
+                # 如果存在异常隧道，进入控制面板执行重启
+                if abnormal:
+                    print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
+                    restart_success = click_open_panel_and_restart(sb, server_id)
+                    if restart_success:
+                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                        extra += f"\n服务器: {server_name}\nID: {server_id}"
+                        send_tg_message("🔄", "隧道异常已重启", extra)
+                    else:
+                        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+                        extra += f"\n错误: 控制面板重启失败"
+                        send_tg_message("❌", "隧道重启失败", extra)
+
+                # 原有续期逻辑
+                extra = f"服务器: {server_name}\nID: {server_id}"
+                if abnormal:
+                    extra += f"\n\n⚠️ 异常隧道已重启: {len(abnormal)} 个"
+                send_tg_message("✅", "续期成功", extra)
+                return  # 成功后直接退出
             else:
                 print(f"⚠️ 登录失败（第 {warp_attempt + 1} 次）")
                 if warp_attempt < MAX_WARP_RETRIES:
                     print("💡 将重新获取 WARP IP 后重试...")
                 continue
 
-    if login_success and sb_instance:
-        # 获取服务器 ID（一次）
-        success, info = visit_server(sb_instance)
-        if not success:
-            error_msg = info.get('error', '未知错误')
-            print(f"❌ 访问服务器失败: {error_msg}")
-            extra = f"错误: {error_msg}"
-            if 'server_id' in info:
-                extra += f"\n服务器ID: {info['server_id']}"
-            send_tg_message("❌", "续期失败", extra)
-            return
-
-        server_id = info['server_id']
-        server_name = info['server_name']
-        print(f"🔧 服务器: {server_name} (ID: {server_id})")
-
-        # 如果存在异常隧道，进入控制面板执行重启
-        if abnormal:
-            print(f"⚠️ 检测到 {len(abnormal)} 个异常隧道域名，需要重启服务器")
-            restart_success = click_open_panel_and_restart(sb_instance, server_id)
-            if restart_success:
-                extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-                extra += f"\n服务器: {server_name}\nID: {server_id}"
-                send_tg_message("🔄", "隧道异常已重启", extra)
-            else:
-                extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-                extra += f"\n错误: 控制面板重启失败"
-                send_tg_message("❌", "隧道重启失败", extra)
-
-        # 原有续期逻辑
-        extra = f"服务器: {server_name}\nID: {server_id}"
-        if abnormal:
-            extra += f"\n\n⚠️ 异常隧道已重启: {len(abnormal)} 个"
-        send_tg_message("✅", "续期成功", extra)
-    else:
-        print(f"\n❌ 登录失败（已尝试 {MAX_WARP_RETRIES + 1} 次），终止后续续期操作。")
-        extra = ""
-        if abnormal:
-            extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
-            extra += "\n登录失败，隧道未重启"
-        send_tg_message("❌", "登录失败", extra)
+    # 所有重试都失败
+    print(f"\n❌ 登录失败（已尝试 {MAX_WARP_RETRIES + 1} 次），终止后续续期操作。")
+    extra = ""
+    if abnormal:
+        extra = "异常域名:\n" + "\n".join([f"  ⚠️ {d}" for d in abnormal])
+        extra += "\n登录失败，隧道未重启"
+    send_tg_message("❌", "登录失败", extra)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n💥 脚本异常退出: {e}")
+        import traceback
+        traceback.print_exc()
+        # 尝试发送 TG 通知
+        try:
+            send_tg_message("💥", "脚本异常退出", f"错误: {e}")
+        except Exception:
+            pass
+        exit(1)
